@@ -3030,6 +3030,45 @@ pub fn repeat<T: Clone>(elt: T) -> Repeat<T> {
     Repeat{element: elt}
 }
 
+#[unstable(feature="core", reason = "new addition")]
+/// An iterator that yields nothing.
+pub struct Empty<T>(marker::PhantomData<T>);
+
+impl<T> Iterator for Empty<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<T> {
+        None
+    }
+}
+///
+/// Creates an iterator that yields nothing.
+#[unstable(feature="core", reason = "new addition")]
+pub fn empty<T>() -> Empty<T> {
+    Empty(marker::PhantomData)
+}
+
+
+/// An iterator that yields an element exactly once.
+#[unstable(feature="core", reason = "new addition")]
+pub struct Once<T> {
+    inner: ::option::IntoIter<T>
+}
+
+impl<T> Iterator for Once<T> {
+    type Item = T;
+
+    fn next(&mut self) -> Option<T> {
+        self.inner.next()
+    }
+}
+
+/// Creates an iterator that yields an element exactly once.
+#[unstable(feature="core", reason = "new addition")]
+pub fn once<T>(value: T) -> Once<T> {
+    Once { inner: Some(value).into_iter() }
+}
+
 /// Functions for lexicographical ordering of sequences.
 ///
 /// Lexicographical ordering through `<`, `<=`, `>=`, `>` requires
