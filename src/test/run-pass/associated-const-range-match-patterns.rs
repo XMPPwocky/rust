@@ -8,21 +8,28 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::ops::Deref;
+#![feature(associated_consts)]
 
-pub struct Foo;
-pub struct Bar;
+struct Foo;
 
-impl Foo {
-    pub fn foo(&self) {}
-    pub fn static_foo() {}
+trait HasNum {
+    const NUM: isize;
+}
+impl HasNum for Foo {
+    const NUM: isize = 1;
 }
 
-impl Deref for Bar {
-    type Target = Foo;
-    fn deref(&self) -> &Foo { loop {} }
+fn main() {
+    assert!(match 2 {
+        Foo::NUM ... 3 => true,
+        _ => false,
+    });
+    assert!(match 0 {
+        -1 ... <Foo as HasNum>::NUM => true,
+        _ => false,
+    });
+    assert!(match 1 {
+        <Foo as HasNum>::NUM ... <Foo>::NUM => true,
+        _ => false,
+    });
 }
-
-// @has issue_19190/struct.Bar.html
-// @has - '//*[@id="method.foo"]' 'fn foo(&self)'
-// @!has - '//*[@id="method.static_foo"]' 'fn static_foo()'

@@ -223,40 +223,27 @@ impl Foo for Bar {
 "##,
 
 E0053: r##"
-For any given method of a trait, the mutabilities of the parameters must match
-between the trait definition and the implementation.
+The parameters of any trait method must match between a trait implementation
+and the trait definition.
 
-Here's an example where the mutability of the `self` parameter is wrong:
+Here are a couple examples of this error:
 
 ```
-trait Foo { fn foo(&self); }
+trait Foo {
+    fn foo(x: u16);
+    fn bar(&self);
+}
 
 struct Bar;
 
 impl Foo for Bar {
-    // error, the signature should be `fn foo(&self)` instead
+    // error, expected u16, found i16
+    fn foo(x: i16) { }
+
+    // error, values differ in mutability
     fn foo(&mut self) { }
 }
-
-fn main() {}
 ```
-
-Here's another example, this time for a non-`self` parameter:
-
-```
-trait Foo { fn foo(x: &mut bool) -> bool; }
-
-struct Bar;
-
-impl Foo for Bar {
-    // error, the type of `x` should be `&mut bool` instead
-    fn foo(x: &bool) -> bool { *x }
-}
-
-fn main() {}
-```
-
-
 "##,
 
 E0054: r##"
@@ -272,6 +259,37 @@ let x_is_nonzero = x != 0;
 // Not allowed, won't compile
 let x_is_nonzero = x as bool;
 ```
+"##,
+
+E0055: r##"
+During a method call, a value is automatically dereferenced as many times as
+needed to make the value's type match the method's receiver. The catch is that
+the compiler will only attempt to dereference a number of times up to the
+recursion limit (which can be set via the `recursion_limit` attribute).
+
+For a somewhat artificial example:
+
+```
+#![recursion_limit="2"]
+
+struct Foo;
+
+impl Foo {
+    fn foo(&self) {}
+}
+
+fn main() {
+    let foo = Foo;
+    let ref_foo = &&Foo;
+
+    // error, reached the recursion limit while auto-dereferencing &&Foo
+    ref_foo.foo();
+}
+```
+
+One fix may be to increase the recursion limit. Note that it is possible to
+create an infinite recursion of dereferencing, in which case the only fix is to
+somehow break the recursion.
 "##,
 
 E0062: r##"
@@ -524,6 +542,31 @@ enum Empty {}
 ```
 "##,
 
+E0089: r##"
+Not enough type parameters were supplied for a function. For example:
+
+```
+fn foo<T, U>() {}
+
+fn main() {
+    foo::<f64>(); // error, expected 2 parameters, found 1 parameter
+}
+```
+
+Note that if a function takes multiple type parameters but you want the compiler
+to infer some of them, you can use type placeholders:
+
+```
+fn foo<T, U>(x: T) {}
+
+fn main() {
+    let x: bool = true;
+    foo::<f64>(x);    // error, expected 2 parameters, found 1 parameter
+    foo::<_, f64>(x); // same as `foo::<bool, f64>(x)`
+}
+```
+"##,
+
 E0106: r##"
 This error indicates that a lifetime is missing from a type. If it is an error
 inside a function signature, the problem may be with failing to adhere to the
@@ -678,6 +721,54 @@ it has been disabled for now.
 [iss20126]: https://github.com/rust-lang/rust/issues/20126
 "##,
 
+E0185: r##"
+An associated function for a trait was defined to be static, but an
+implementation of the trait declared the same function to be a method (i.e. to
+take a `self` parameter).
+
+Here's an example of this error:
+
+```
+trait Foo {
+    fn foo();
+}
+
+struct Bar;
+
+impl Foo for Bar {
+    // error, method `foo` has a `&self` declaration in the impl, but not in
+    // the trait
+    fn foo(&self) {}
+}
+"##,
+
+E0186: r##"
+An associated function for a trait was defined to be a method (i.e. to take a
+`self` parameter), but an implementation of the trait declared the same function
+to be static.
+
+Here's an example of this error:
+
+```
+trait Foo {
+    fn foo(&self);
+}
+
+struct Bar;
+
+impl Foo for Bar {
+    // error, method `foo` has a `&self` declaration in the trait, but not in
+    // the impl
+    fn foo() {}
+}
+"##,
+
+E0192: r##"
+Negative impls are only allowed for traits with default impls. For more
+information see the [opt-in builtin traits RFC](https://github.com/rust-lang/
+rfcs/blob/master/text/0019-opt-in-builtin-traits.md).
+"##,
+
 E0197: r##"
 Inherent implementations (one that do not implement a trait but provide
 methods associated with a type) are always safe because they are not
@@ -764,6 +855,14 @@ impl Foo {
     fn bar(&self) -> bool { self.0 > 5 }
 }
 ```
+"##,
+
+E0202: r##"
+Inherent associated types were part of [RFC 195] but are not yet implemented.
+See [the tracking issue][iss8995] for the status of this implementation.
+
+[RFC 195]: https://github.com/rust-lang/rfcs/pull/195
+[iss8995]: https://github.com/rust-lang/rust/issues/8995
 "##,
 
 E0204: r##"
@@ -880,10 +979,10 @@ const C: [u32; 0.0] = []; // error
 "##,
 
 E0250: r##"
-This means there was an error while evaluating the expression for the length of
-a fixed-size array type.
+There was an error while evaluating the expression for the length of a fixed-
+size array type.
 
-Some examples of code that produces this error are:
+Some examples of this error are:
 
 ```
 // divide by zero in the length expression
@@ -899,6 +998,12 @@ const C: [u32; u8::MAX + f64::EPSILON] = [];
 ```
 "##,
 
+E0318: r##"
+Default impls for a trait must be located in the same crate where the trait was
+defined. For more information see the [opt-in builtin traits RFC](https://github
+.com/rust-lang/rfcs/blob/master/text/0019-opt-in-builtin-traits.md).
+"##,
+
 E0322: r##"
 The `Sized` trait is a special trait built-in to the compiler for types with a
 constant size known at compile-time. This trait is automatically implemented
@@ -906,11 +1011,28 @@ for types as needed by the compiler, and it is currently disallowed to
 explicitly implement it for a type.
 "##,
 
+E0326: r##"
+The types of any associated constants in a trait implementation must match the
+types in the trait definition. This error indicates that there was a mismatch.
+
+Here's an example of this error:
+
+```
+trait Foo {
+    const BAR: bool;
+}
+
+struct Bar;
+
+impl Foo for Bar {
+    const BAR: u32 = 5; // error, expected bool, found u32
+}
+```
+"##,
+
 E0368: r##"
 This error indicates that a binary assignment operator like `+=` or `^=` was
-applied to the wrong types.
-
-A couple examples of this are as follows:
+applied to the wrong types. For example:
 
 ```
 let mut x: u16 = 5;
@@ -973,8 +1095,13 @@ Trying to implement a trait for a trait object (as in `impl Trait1 for
 Trait2 { ... }`) does not work if the trait is not object-safe. Please see the
 [RFC 255] for more details on object safety rules.
 
-[RFC 255]:https://github.com/rust-lang/rfcs/blob/master/text/0255-object-\
-safety.md
+[RFC 255]: https://github.com/rust-lang/rfcs/pull/255
+"##,
+
+E0380: r##"
+Default impls are only allowed for traits with no methods or associated items.
+For more information see the [opt-in builtin traits RFC](https://github.com/rust
+-lang/rfcs/blob/master/text/0019-opt-in-builtin-traits.md).
 "##
 
 }
@@ -989,7 +1116,6 @@ register_diagnostics! {
     E0040, // explicit use of destructor method
     E0044, // foreign items may not have type parameters
     E0045, // variadic function must have C calling convention
-    E0055, // method has an incompatible type for trait
     E0057, // method has an incompatible type for trait
     E0059,
     E0060,
@@ -1004,7 +1130,6 @@ register_diagnostics! {
     E0086,
     E0087,
     E0088,
-    E0089,
     E0090,
     E0091,
     E0092,
@@ -1037,20 +1162,16 @@ register_diagnostics! {
     E0174, // explicit use of unboxed closure methods are experimental
     E0182,
     E0183,
-    E0185,
-    E0186,
     E0187, // can't infer the kind of the closure
     E0188, // can not cast a immutable reference to a mutable pointer
     E0189, // deprecated: can only cast a boxed pointer to a boxed object
     E0190, // deprecated: can only cast a &-pointer to an &-object
     E0191, // value of the associated type must be specified
-    E0192, // negative impls are allowed just for `Send` and `Sync`
     E0193, // cannot bound type where clause bounds may only be attached to types
            // involving type parameters
     E0194,
     E0195, // lifetime parameters or bounds on method do not match the trait declaration
     E0196, // cannot determine a type for this closure
-    E0202, // associated items are not allowed in inherent impls
     E0203, // type parameter has more than one relaxed default bound,
            // and only one is supported
     E0207, // type parameter is not constrained by the impl trait, self type, or predicate
@@ -1093,16 +1214,15 @@ register_diagnostics! {
     E0246, // illegal recursive type
     E0247, // found module name used as a type
     E0248, // found value name used as a type
-    E0318, // can't create default impls for traits outside their crates
     E0319, // trait impls for defaulted traits allowed just for structs/enums
     E0320, // recursive overflow during dropck
     E0321, // extended coherence rules for defaulted traits violated
     E0323, // implemented an associated const when another trait item expected
     E0324, // implemented a method when another trait item expected
     E0325, // implemented an associated type when another trait item expected
-    E0326, // associated const implemented with different type from trait
     E0327, // referred to method instead of constant in match pattern
     E0328, // cannot implement Unsize explicitly
+    E0329, // associated const depends on type parameter or Self.
     E0366, // dropck forbid specialization to concrete type or region
     E0367, // dropck forbid specialization to predicate not in struct/enum
     E0369, // binary operation `<op>` cannot be applied to types
@@ -1115,5 +1235,11 @@ register_diagnostics! {
            // between structures
     E0377, // the trait `CoerceUnsized` may only be implemented for a coercion
            // between structures with the same definition
-    E0379  // trait fns cannot be const
+    E0379,  // trait fns cannot be const
+    E0390, // only a single inherent implementation marked with
+           // `#[lang = \"{}\"]` is allowed for the `{}` primitive
+    E0391, // unsupported cyclic reference between types/traits detected
+    E0392, // parameter `{}` is never used
+    E0393  // the type parameter `{}` must be explicitly specified in an object
+           // type because its default value `{}` references the type `Self`"
 }

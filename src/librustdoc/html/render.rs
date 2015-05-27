@@ -51,26 +51,20 @@ use std::sync::Arc;
 
 use externalfiles::ExternalHtml;
 
-use serialize::json;
-use serialize::json::ToJson;
-use syntax::abi;
-use syntax::ast;
-use syntax::ast_util;
-use syntax::attr;
+use serialize::json::{self, ToJson};
+use syntax::{abi, ast, ast_util, attr};
 use rustc::util::nodemap::NodeSet;
 
-use clean;
+use clean::{self, SelfTy};
 use doctree;
 use fold::DocFolder;
 use html::escape::Escape;
 use html::format::{ConstnessSpace};
 use html::format::{TyParamBounds, WhereClause, href, AbiSpace};
 use html::format::{VisSpace, Method, UnsafetySpace, MutableSpace};
-use html::highlight;
 use html::item_type::ItemType;
-use html::layout;
-use html::markdown::Markdown;
-use html::markdown;
+use html::markdown::{self, Markdown};
+use html::{highlight, layout};
 
 /// A pair of name and its optional document.
 pub type NameDoc = (String, Option<String>);
@@ -871,7 +865,7 @@ impl DocFolder for Cache {
             clean::StructItem(ref s)          => self.generics(&s.generics),
             clean::EnumItem(ref e)            => self.generics(&e.generics),
             clean::FunctionItem(ref f)        => self.generics(&f.generics),
-            clean::TypedefItem(ref t)         => self.generics(&t.generics),
+            clean::TypedefItem(ref t, _)      => self.generics(&t.generics),
             clean::TraitItem(ref t)           => self.generics(&t.generics),
             clean::ImplItem(ref i)            => self.generics(&i.generics),
             clean::TyMethodItem(ref i)        => self.generics(&i.generics),
@@ -936,6 +930,10 @@ impl DocFolder for Cache {
                         };
                         ((Some(*last), path), true)
                     }
+                }
+                clean::TypedefItem(_, true) => {
+                    // skip associated types in impls
+                    ((None, None), false)
                 }
                 _ => ((None, Some(&*self.stack)), false)
             };
@@ -1498,7 +1496,7 @@ impl<'a> fmt::Display for Item<'a> {
             clean::TraitItem(ref t) => item_trait(fmt, self.cx, self.item, t),
             clean::StructItem(ref s) => item_struct(fmt, self.item, s),
             clean::EnumItem(ref e) => item_enum(fmt, self.item, e),
-            clean::TypedefItem(ref t) => item_typedef(fmt, self.item, t),
+            clean::TypedefItem(ref t, _) => item_typedef(fmt, self.item, t),
             clean::MacroItem(ref m) => item_macro(fmt, self.item, m),
             clean::PrimitiveItem(ref p) => item_primitive(fmt, self.item, p),
             clean::StaticItem(ref i) | clean::ForeignStaticItem(ref i) =>
@@ -2310,10 +2308,10 @@ fn render_deref_methods(w: &mut fmt::Formatter, impl_: &Impl) -> fmt::Result {
     let deref_type = impl_.impl_.trait_.as_ref().unwrap();
     let target = impl_.impl_.items.iter().filter_map(|item| {
         match item.inner {
-            clean::TypedefItem(ref t) => Some(&t.type_),
+            clean::TypedefItem(ref t, true) => Some(&t.type_),
             _ => None,
         }
-    }).next().unwrap();
+    }).next().expect("Expected associated type binding");
     let what = AssocItemRender::DerefFor { trait_: deref_type, type_: target };
     match *target {
         clean::ResolvedPath { did, .. } => render_assoc_items(w, did, what),
@@ -2329,6 +2327,9 @@ fn render_deref_methods(w: &mut fmt::Formatter, impl_: &Impl) -> fmt::Result {
     }
 }
 
+// Render_header is false when we are rendering a `Deref` impl and true
+// otherwise. If render_header is false, we will avoid rendering static
+// methods, since they are not accessible for the type implementing `Deref`
 fn render_impl(w: &mut fmt::Formatter, i: &Impl, link: AssocItemLink,
                render_header: bool) -> fmt::Result {
     if render_header {
@@ -2348,16 +2349,19 @@ fn render_impl(w: &mut fmt::Formatter, i: &Impl, link: AssocItemLink,
     }
 
     fn doctraititem(w: &mut fmt::Formatter, item: &clean::Item,
-                    link: AssocItemLink) -> fmt::Result {
+                    link: AssocItemLink, render_static: bool) -> fmt::Result {
         match item.inner {
             clean::MethodItem(..) | clean::TyMethodItem(..) => {
-                try!(write!(w, "<h4 id='method.{}' class='{}'><code>",
-                            *item.name.as_ref().unwrap(),
-                            shortty(item)));
+                // Only render when the method is not static or we allow static methods
+                if !is_static_method(item) || render_static {
+                    try!(write!(w, "<h4 id='method.{}' class='{}'><code>",
+                                *item.name.as_ref().unwrap(),
+                                shortty(item)));
                 try!(render_assoc_item(w, item, link));
-                try!(write!(w, "</code></h4>\n"));
+                    try!(write!(w, "</code></h4>\n"));
+                }
             }
-            clean::TypedefItem(ref tydef) => {
+            clean::TypedefItem(ref tydef, _) => {
                 let name = item.name.as_ref().unwrap();
                 try!(write!(w, "<h4 id='assoc_type.{}' class='{}'><code>",
                             *name,
@@ -2389,22 +2393,36 @@ fn render_impl(w: &mut fmt::Formatter, i: &Impl, link: AssocItemLink,
             }
             _ => panic!("can't make docs for trait item with name {:?}", item.name)
         }
-        if let AssocItemLink::Anchor = link {
-            document(w, item)
+
+        return if let AssocItemLink::Anchor = link {
+            if is_static_method(item) && !render_static {
+                Ok(())
+            } else {
+                document(w, item)
+            }
         } else {
             Ok(())
+        };
+
+        fn is_static_method(item: &clean::Item) -> bool {
+            match item.inner {
+                clean::MethodItem(ref method) => method.self_ == SelfTy::SelfStatic,
+                clean::TyMethodItem(ref method) => method.self_ == SelfTy::SelfStatic,
+                _ => false
+            }
         }
     }
 
     try!(write!(w, "<div class='impl-items'>"));
     for trait_item in i.impl_.items.iter() {
-        try!(doctraititem(w, trait_item, link));
+        try!(doctraititem(w, trait_item, link, render_header));
     }
 
     fn render_default_items(w: &mut fmt::Formatter,
                             did: ast::DefId,
                             t: &clean::Trait,
-                            i: &clean::Impl) -> fmt::Result {
+                              i: &clean::Impl,
+                              render_static: bool) -> fmt::Result {
         for trait_item in &t.items {
             let n = trait_item.name.clone();
             match i.items.iter().find(|m| { m.name == n }) {
@@ -2412,7 +2430,7 @@ fn render_impl(w: &mut fmt::Formatter, i: &Impl, link: AssocItemLink,
                 None => {}
             }
 
-            try!(doctraititem(w, trait_item, AssocItemLink::GotoSource(did)));
+            try!(doctraititem(w, trait_item, AssocItemLink::GotoSource(did), render_static));
         }
         Ok(())
     }
@@ -2423,7 +2441,8 @@ fn render_impl(w: &mut fmt::Formatter, i: &Impl, link: AssocItemLink,
     // for them work.
     if let Some(clean::ResolvedPath { did, .. }) = i.impl_.trait_ {
         if let Some(t) = cache().traits.get(&did) {
-            try!(render_default_items(w, did, t, &i.impl_));
+            try!(render_default_items(w, did, t, &i.impl_, render_header));
+
         }
     }
     try!(write!(w, "</div>"));
@@ -2432,10 +2451,11 @@ fn render_impl(w: &mut fmt::Formatter, i: &Impl, link: AssocItemLink,
 
 fn item_typedef(w: &mut fmt::Formatter, it: &clean::Item,
                 t: &clean::Typedef) -> fmt::Result {
-    try!(write!(w, "<pre class='rust typedef'>type {}{} = {};</pre>",
+    try!(write!(w, "<pre class='rust typedef'>type {}{}{where_clause} = {type_};</pre>",
                   it.name.as_ref().unwrap(),
                   t.generics,
-                  t.type_));
+                  where_clause = WhereClause(&t.generics),
+                  type_ = t.type_));
 
     document(w, it)
 }
